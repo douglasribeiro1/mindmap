@@ -1,0 +1,720 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mapa Mental - Alta Performance</title>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #0f172a; 
+            color: #f8fafc; 
+            margin: 0;
+            overflow: hidden;
+        }
+
+        #editor {
+            font-family: 'JetBrains Mono', monospace;
+            background-color: #1e293b; 
+            resize: none;
+            outline: none;
+            tab-size: 4;
+        }
+
+        #editor::-webkit-scrollbar { width: 8px; }
+        #editor::-webkit-scrollbar-track { background: #1e293b; }
+        #editor::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+
+        .panel-transition { transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.2s; }
+        #file-input { display: none; }
+        svg text { user-select: none; }
+
+        .selection { fill: #3b82f6; fill-opacity: 0.15; stroke: #60a5fa; stroke-dasharray: 4; }
+        .custom-link-path { fill: none; stroke: #a855f7; stroke-width: 2px; stroke-dasharray: 6 4; transition: stroke 0.2s, stroke-width 0.2s; pointer-events: stroke; cursor: pointer; }
+        .custom-link-path:hover { stroke: #ef4444; stroke-width: 4px; }
+        .connect-mode-active .node-rect { cursor: crosshair !important; }
+
+        /* Estilos Search UI */
+        #search-bar { transition: transform 0.2s, opacity 0.2s; }
+        #search-bar.hidden-up { transform: translateY(-150%) translateX(-50%); opacity: 0; pointer-events: none; }
+        
+        .task-checkbox:hover rect { stroke: #10b981; fill-opacity: 0.2; }
+    </style>
+</head>
+<body class="flex h-screen w-screen relative">
+
+    <!-- UI Busca Global (Ctrl+F) -->
+    <div id="search-bar" class="hidden-up absolute top-4 left-1/2 -translate-x-1/2 z-50 bg-slate-800 border border-slate-700 rounded-lg shadow-2xl flex items-center p-2 gap-2 transform">
+        <i data-lucide="search" class="w-4 h-4 text-slate-400"></i>
+        <input type="text" id="search-input" class="bg-transparent text-slate-200 border-none outline-none focus:ring-0 text-sm w-48" placeholder="Buscar no mapa...">
+        <span id="search-counter" class="text-xs text-slate-500 whitespace-nowrap min-w-[40px] text-center">0/0</span>
+        <div class="flex items-center border-l border-slate-700 pl-2 gap-1">
+            <button id="btn-search-prev" class="p-1 text-slate-400 hover:text-white rounded" title="Anterior (Shift+Enter)"><i data-lucide="chevron-up" class="w-4 h-4"></i></button>
+            <button id="btn-search-next" class="p-1 text-slate-400 hover:text-white rounded" title="Próximo (Enter)"><i data-lucide="chevron-down" class="w-4 h-4"></i></button>
+            <button id="btn-search-close" class="p-1 text-red-400 hover:text-red-300 rounded ml-1" title="Fechar (Esc)"><i data-lucide="x" class="w-4 h-4"></i></button>
+        </div>
+    </div>
+
+    <!-- Painel Lateral: Editor -->
+    <div id="sidebar" class="panel-transition w-1/3 flex flex-col border-r border-slate-700 relative h-full shrink-0">
+        <div class="h-14 flex items-center justify-between px-4 border-b border-slate-700 bg-slate-800/50">
+            <h1 class="text-sm font-semibold tracking-wider text-slate-300 uppercase">Editor de Estrutura</h1>
+            <div class="text-xs text-slate-500 hidden xl:block">Tab = Filho | Enter = Irmão</div>
+        </div>
+        <textarea id="editor" class="flex-1 w-full p-6 text-slate-300 text-sm leading-relaxed border-none focus:ring-0" placeholder="Digite seu mapa mental..."></textarea>
+    </div>
+
+    <!-- Painel Principal: Canvas -->
+    <div id="main-panel" class="flex-1 relative h-full flex flex-col bg-slate-900 overflow-hidden">
+        
+        <!-- Header Flutuante / Ferramentas -->
+        <div class="absolute top-4 left-4 right-4 z-10 flex justify-between items-start pointer-events-none">
+            
+            <div class="flex gap-2 pointer-events-auto">
+                <button id="toggle-sidebar" class="p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg shadow-lg border border-slate-700 transition-colors" title="Ocultar Editor">
+                    <i data-lucide="panel-left-close" id="toggle-icon"></i>
+                </button>
+                <div class="bg-slate-800 p-1 rounded-lg shadow-lg border border-slate-700 flex items-center gap-1">
+                    <button id="btn-undo" class="p-1.5 text-slate-400 hover:text-white hover:bg-slate-700 rounded transition disabled:opacity-30 disabled:cursor-not-allowed" title="Desfazer (Ctrl+Z)">
+                        <i data-lucide="undo" class="w-4 h-4"></i>
+                    </button>
+                    <button id="btn-redo" class="p-1.5 text-slate-400 hover:text-white hover:bg-slate-700 rounded transition disabled:opacity-30 disabled:cursor-not-allowed" title="Refazer (Ctrl+Y)">
+                        <i data-lucide="redo" class="w-4 h-4"></i>
+                    </button>
+                </div>
+            </div>
+
+            <div class="flex gap-2 pointer-events-auto bg-slate-800 p-1 rounded-lg shadow-lg border border-slate-700">
+                <button id="btn-select-mode" class="p-2 text-slate-400 hover:text-white hover:bg-slate-700 rounded-md transition flex items-center gap-2 text-sm" title="Seleção">
+                    <i data-lucide="mouse-pointer-square-dashed" class="w-4 h-4"></i><span class="hidden md:inline font-medium">Seleção</span>
+                </button>
+                <div class="w-px h-6 bg-slate-700 my-auto"></div>
+                <button id="btn-connect-mode" class="p-2 text-slate-400 hover:text-white hover:bg-slate-700 rounded-md transition flex items-center gap-2 text-sm" title="Conectar">
+                    <i data-lucide="link" class="w-4 h-4"></i><span class="hidden md:inline font-medium">Conectar</span>
+                </button>
+                <div class="w-px h-6 bg-slate-700 my-auto"></div>
+                <button id="btn-filter-fav" class="p-2 text-slate-400 hover:text-yellow-400 hover:bg-slate-700 rounded-md transition flex items-center gap-2 text-sm" title="Destacar Favoritos">
+                    <i data-lucide="star" class="w-4 h-4"></i><span class="hidden md:inline font-medium">Favoritos</span>
+                </button>
+                <div class="w-px h-6 bg-slate-700 my-auto"></div>
+                <button id="btn-auto-layout" class="p-2 text-slate-400 hover:text-white hover:bg-slate-700 rounded-md transition flex items-center gap-2 text-sm" title="Reorganizar">
+                    <i data-lucide="wand-2" class="w-4 h-4"></i><span class="hidden md:inline font-medium">Organizar</span>
+                </button>
+            </div>
+
+            <div class="pointer-events-auto flex flex-col gap-2 bg-slate-800 p-2 rounded-xl shadow-xl border border-slate-700">
+                <button id="btn-import" class="p-2 text-slate-300 hover:text-white hover:bg-slate-700 rounded-lg transition text-left flex items-center gap-3 text-sm" title="Abrir">
+                    <i data-lucide="folder-open" class="w-4 h-4"></i> <span class="hidden xl:inline">Abrir</span>
+                </button>
+                <input type="file" id="file-input" accept=".json">
+                <button id="btn-save" class="p-2 text-slate-300 hover:text-white hover:bg-slate-700 rounded-lg transition text-left flex items-center gap-3 text-sm" title="Salvar (Ctrl+S)">
+                    <i data-lucide="save" class="w-4 h-4"></i> <span class="hidden xl:inline">Salvar</span>
+                </button>
+                <button id="btn-save-as" class="p-2 text-slate-300 hover:text-white hover:bg-slate-700 rounded-lg transition text-left flex items-center gap-3 text-sm" title="Salvar Como">
+                    <i data-lucide="download" class="w-4 h-4"></i> <span class="hidden xl:inline">Salvar Como</span>
+                </button>
+                <hr class="border-slate-700">
+                <button id="btn-clear" class="p-2 text-red-400 hover:text-red-300 hover:bg-slate-700 rounded-lg transition text-left flex items-center gap-3 text-sm" title="Limpar">
+                    <i data-lucide="trash-2" class="w-4 h-4"></i> <span class="hidden xl:inline">Limpar</span>
+                </button>
+            </div>
+        </div>
+
+        <div id="canvas-container" class="w-full h-full cursor-grab active:cursor-grabbing"></div>
+    </div>
+
+    <!-- PWA Injection Block -->
+    <script>
+        // Gerador Dinâmico de Manifest e Service Worker PWA (Requisito Arquivo Único)
+        const pwaManifest = {
+            name: "MindMap Pro Premium",
+            short_name: "MindMap",
+            description: "Software de Mapas Mentais Produtivo Offline",
+            start_url: ".",
+            display: "standalone",
+            background_color: "#0f172a",
+            theme_color: "#0f172a",
+            icons: [{
+                src: "data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23f8fafc' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z'/%3E%3Cpath d='m3.3 7 8.7 5 8.7-5'/%3E%3Cpath d='M12 22V12'/%3E%3C/svg%3E",
+                sizes: "512x512", type: "image/svg+xml"
+            }]
+        };
+        const manifestUrl = URL.createObjectURL(new Blob([JSON.stringify(pwaManifest)], {type: 'application/manifest+json'}));
+        document.head.insertAdjacentHTML('beforeend', `<link rel="manifest" href="${manifestUrl}">`);
+
+        // Service worker embutido para caches base (Intercepta chamadas mantendo offline ativo)
+        const swScript = `
+            const CACHE = 'mindmap-pro-v1';
+            self.addEventListener('install', e => self.skipWaiting());
+            self.addEventListener('activate', e => e.waitUntil(self.clients.claim()));
+            self.addEventListener('fetch', e => {
+                e.respondWith(fetch(e.request).catch(() => new Response("Aplicativo Offline - MindMap Pro", {headers:{'Content-Type':'text/html'}})));
+            });
+        `;
+        if ('serviceWorker' in navigator) {
+            const swUrl = URL.createObjectURL(new Blob([swScript], {type: 'application/javascript'}));
+            navigator.serviceWorker.register(swUrl).catch(e => console.log('SW Registration fallback (expected on local files).'));
+        }
+    </script>
+
+    <script>
+        lucide.createIcons();
+
+        /* =========================================
+           1. ESTADOS, DB & ARQUIVOS
+           ========================================= */
+        const DB_NAME = 'MindMapProDB';
+        const STORE_NAME = 'documents';
+        const DOC_ID = 'current_map';
+
+        let appHistory = [];
+        let historyIndex = -1;
+        let currentFileHandle = null;
+        let favorites = new Set();
+        let isFavFilterActive = false;
+
+        const DEFAULT_TEXT = `Produtividade\n\tAtalhos de Teclado\n\t\t[x] Enter para Nó Irmão\n\t\t[x] Tab para Nó Filho\n\t\t[ ] Shift+Tab para Recuar\n\t\t[ ] F2 para Renomear ou Delete\n\tFuncionalidades\n\t\t[x] Ctrl+F para Busca Global\n\t\t[x] Favoritos com tecla F\n\t\t[ ] Checklists Dinâmicos\n\t\t\tDigite [ ] e clique no balão!`;
+
+        function initDB() {
+            return new Promise((resolve, reject) => {
+                const request = indexedDB.open(DB_NAME, 3); 
+                request.onupgradeneeded = (e) => e.target.result.createObjectStore(STORE_NAME);
+                request.onsuccess = (e) => resolve(e.target.result);
+                request.onerror = (e) => reject(e.target.error);
+            });
+        }
+
+        async function saveStateToDB(stateObj) {
+            const db = await initDB();
+            db.transaction(STORE_NAME, 'readwrite').objectStore(STORE_NAME).put(stateObj, DOC_ID);
+        }
+
+        async function loadStateFromDB() {
+            const db = await initDB();
+            return new Promise((resolve) => {
+                const req = db.transaction(STORE_NAME, 'readonly').objectStore(STORE_NAME).get(DOC_ID);
+                req.onsuccess = () => resolve(req.result);
+                req.onerror = () => resolve(null);
+            });
+        }
+
+        function pushToHistory(skipSave = false) {
+            const state = { 
+                text: editor.value, 
+                offsets: JSON.stringify(nodeOffsets),
+                customLinks: JSON.stringify(customLinks),
+                favorites: JSON.stringify(Array.from(favorites))
+            };
+            if (historyIndex >= 0) {
+                const last = appHistory[historyIndex];
+                if (last.text === state.text && last.offsets === state.offsets && last.favorites === state.favorites && last.customLinks === state.customLinks) return;
+            }
+            appHistory = appHistory.slice(0, historyIndex + 1);
+            appHistory.push(state);
+            historyIndex++;
+            updateHistoryButtons();
+            if (!skipSave) saveStateToDB(state);
+        }
+
+        function applyState(state) {
+            editor.value = state.text;
+            nodeOffsets = JSON.parse(state.offsets || '{}');
+            customLinks = JSON.parse(state.customLinks || '[]');
+            favorites = new Set(JSON.parse(state.favorites || '[]'));
+            updateD3(state.text);
+            saveStateToDB(state);
+            updateHistoryButtons();
+            if(isFavFilterActive) updateNodeStyles();
+        }
+
+        function undo() { if (historyIndex > 0) applyState(appHistory[--historyIndex]); }
+        function redo() { if (historyIndex < appHistory.length - 1) applyState(appHistory[++historyIndex]); }
+        function updateHistoryButtons() {
+            document.getElementById('btn-undo').disabled = historyIndex <= 0;
+            document.getElementById('btn-redo').disabled = historyIndex >= appHistory.length - 1;
+        }
+
+        async function saveMap(saveAs = false) {
+            const state = { text: editor.value, offsets: JSON.stringify(nodeOffsets), customLinks: JSON.stringify(customLinks), favorites: JSON.stringify(Array.from(favorites)) };
+            const content = JSON.stringify(state, null, 2);
+            if ('showSaveFilePicker' in window) {
+                try {
+                    if (saveAs || !currentFileHandle) currentFileHandle = await window.showSaveFilePicker({suggestedName: 'mapa.json'});
+                    const writable = await currentFileHandle.createWritable();
+                    await writable.write(content); await writable.close();
+                    const btn = document.getElementById('btn-save');
+                    const orig = btn.innerHTML;
+                    btn.innerHTML = `<i data-lucide="check" class="w-4 h-4 text-green-400"></i><span class="hidden md:inline text-green-400">Salvo!</span>`;
+                    lucide.createIcons(); setTimeout(() => { btn.innerHTML = orig; lucide.createIcons(); }, 2000);
+                } catch (e) {}
+            } else {
+                const a = document.createElement('a'); a.href = "data:text/json;charset=utf-8," + encodeURIComponent(content);
+                a.download = "mapa.json"; document.body.appendChild(a); a.click(); a.remove();
+            }
+        }
+
+        /* =========================================
+           2. BUSCA GLOBAL & UI INTERFACE
+           ========================================= */
+        const editor = document.getElementById('editor');
+        const sidebar = document.getElementById('sidebar');
+        const searchBar = document.getElementById('search-bar');
+        const searchInput = document.getElementById('search-input');
+        const searchCounter = document.getElementById('search-counter');
+        
+        let searchResults = [];
+        let searchIndex = -1;
+        let searchQuery = "";
+        let isSidebarOpen = true;
+
+        document.getElementById('toggle-sidebar').addEventListener('click', () => {
+            isSidebarOpen = !isSidebarOpen;
+            sidebar.classList.toggle('w-0', !isSidebarOpen); sidebar.classList.toggle('opacity-0', !isSidebarOpen);
+            sidebar.classList.toggle('w-1/3', isSidebarOpen); sidebar.classList.toggle('opacity-100', isSidebarOpen);
+            document.getElementById('toggle-icon').setAttribute('data-lucide', isSidebarOpen ? 'panel-left-close' : 'panel-left-open');
+            lucide.createIcons(); setTimeout(centerMap, 300);
+        });
+
+        document.getElementById('btn-filter-fav').addEventListener('click', (e) => {
+            isFavFilterActive = !isFavFilterActive;
+            e.currentTarget.classList.toggle('text-yellow-400', isFavFilterActive);
+            e.currentTarget.classList.toggle('text-slate-400', !isFavFilterActive);
+            updateNodeStyles();
+        });
+
+        function toggleSearch(forceShow = null) {
+            const isHidden = searchBar.classList.contains('hidden-up');
+            if (forceShow === false || (!isHidden && forceShow === null)) {
+                searchBar.classList.add('hidden-up'); searchQuery = ""; updateNodeStyles();
+                if(document.activeElement === searchInput) editor.focus();
+            } else {
+                searchBar.classList.remove('hidden-up'); searchInput.focus(); searchInput.select();
+            }
+        }
+
+        searchInput.addEventListener('input', (e) => {
+            searchQuery = e.target.value.toLowerCase().trim();
+            if(!searchQuery) { searchResults = []; searchIndex = -1; searchCounter.innerText = "0/0"; updateNodeStyles(); return; }
+            searchResults = Array.from(nodesMap.values()).filter(n => n.data.name.toLowerCase().includes(searchQuery));
+            searchIndex = searchResults.length > 0 ? 0 : -1;
+            updateSearchUI();
+        });
+
+        function updateSearchUI() {
+            if(searchResults.length === 0) { searchCounter.innerText = "0/0"; updateNodeStyles(); return; }
+            searchCounter.innerText = `${searchIndex + 1}/${searchResults.length}`;
+            updateNodeStyles(); centerMapOnNode(searchResults[searchIndex]);
+        }
+
+        document.getElementById('btn-search-next').addEventListener('click', () => { if(searchResults.length) { searchIndex = (searchIndex + 1) % searchResults.length; updateSearchUI(); } });
+        document.getElementById('btn-search-prev').addEventListener('click', () => { if(searchResults.length) { searchIndex = (searchIndex - 1 + searchResults.length) % searchResults.length; updateSearchUI(); } });
+        document.getElementById('btn-search-close').addEventListener('click', () => toggleSearch(false));
+
+        searchInput.addEventListener('keydown', e => {
+            if (e.key === 'Enter') { e.preventDefault(); if (e.shiftKey) document.getElementById('btn-search-prev').click(); else document.getElementById('btn-search-next').click(); }
+            if (e.key === 'Escape') toggleSearch(false);
+        });
+
+        let debounceTimer;
+        editor.addEventListener('input', () => { clearTimeout(debounceTimer); debounceTimer = setTimeout(() => { updateD3(editor.value); pushToHistory(); }, 300); });
+        
+        // Comportamento do Tab no Editor (Inserir Espaçamento)
+        editor.addEventListener('keydown', function(e) {
+            if (e.key === 'Tab') { e.preventDefault(); const s = this.selectionStart, e_pos = this.selectionEnd; this.value = this.value.substring(0, s) + "\t" + this.value.substring(e_pos); this.selectionStart = this.selectionEnd = s + 1; updateD3(editor.value); pushToHistory(); }
+        });
+
+        /* =========================================
+           3. LÓGICA DE TECLADO POWER-USER
+           ========================================= */
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') { toggleSearch(false); deactivateTools(); }
+            if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') { e.preventDefault(); toggleSearch(true); return; }
+            if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); saveMap(false); return; }
+            if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && !e.shiftKey) { e.preventDefault(); undo(); return; }
+            if ((e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === 'y' || (e.shiftKey && e.key.toLowerCase() === 'z'))) { e.preventDefault(); redo(); return; }
+
+            // Atalhos diretos de Canvas (Apenas se Editor e Busca não estiverem ativos)
+            if (document.activeElement === editor || document.activeElement === searchInput) return;
+
+            // Favoritos (Ciclo)
+            if (e.altKey && e.key.toLowerCase() === 'f') {
+                e.preventDefault();
+                const favs = Array.from(nodesMap.values()).filter(n => favorites.has(n.data.path));
+                if(favs.length) {
+                    let cIdx = favs.findIndex(n => selectedNodes.has(n.id));
+                    cIdx = e.shiftKey ? (cIdx <= 0 ? favs.length - 1 : cIdx - 1) : ((cIdx + 1) % favs.length);
+                    selectedNodes.clear(); selectedNodes.add(favs[cIdx].id); centerMapOnNode(favs[cIdx]); updateNodeStyles();
+                }
+                return;
+            }
+
+            if (selectedNodes.size === 1) {
+                const n = nodesMap.get(Array.from(selectedNodes)[0]);
+                if (!n) return;
+                const lines = editor.value.split('\n');
+                const idx = n.data.lineIndex;
+                const depth = n.data.depth;
+
+                // F: Favoritar
+                if (e.key.toLowerCase() === 'f' && !e.ctrlKey && !e.altKey && !e.shiftKey) {
+                    e.preventDefault();
+                    if(favorites.has(n.data.path)) favorites.delete(n.data.path); else favorites.add(n.data.path);
+                    pushToHistory(); updateD3(editor.value); return;
+                }
+
+                // F2: Renomear
+                if (e.key === 'F2') {
+                    e.preventDefault();
+                    const oldText = n.data.originalRawName || n.data.name;
+                    const novo = prompt("Renomear tópico:", oldText);
+                    if (novo !== null && novo.trim() !== "") {
+                        lines[idx] = '\t'.repeat(depth) + novo;
+                        editor.value = lines.join('\n'); updateD3(editor.value); pushToHistory();
+                    }
+                    return;
+                }
+
+                // Enter: Irmão
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    let target = idx + 1;
+                    while(target < lines.length && lines[target].match(/^\t*/)[0].length > depth) target++;
+                    lines.splice(target, 0, '\t'.repeat(depth) + "Novo Tópico");
+                    editor.value = lines.join('\n'); updateD3(editor.value); pushToHistory(); return;
+                }
+
+                // Tab / Shift+Tab: Filho / Recuo
+                if (e.key === 'Tab') {
+                    e.preventDefault();
+                    if (e.shiftKey) {
+                        if (depth > 0) lines[idx] = '\t'.repeat(depth - 1) + lines[idx].trim();
+                    } else {
+                        lines.splice(idx + 1, 0, '\t'.repeat(depth + 1) + "Novo Tópico");
+                    }
+                    editor.value = lines.join('\n'); updateD3(editor.value); pushToHistory(); return;
+                }
+
+                // Delete: Remover (e filhos associados no texto)
+                if (e.key === 'Delete') {
+                    e.preventDefault();
+                    let endIdx = idx + 1;
+                    while(endIdx < lines.length && lines[endIdx].match(/^\t*/)[0].length > depth) endIdx++;
+                    lines.splice(idx, endIdx - idx);
+                    selectedNodes.clear(); editor.value = lines.join('\n'); updateD3(editor.value); pushToHistory(); return;
+                }
+            }
+        });
+
+        /* =========================================
+           4. PARSER E ESTRUTURA
+           ========================================= */
+        const container = document.getElementById('canvas-container');
+        let width = container.clientWidth; let height = container.clientHeight;
+        const svg = d3.select("#canvas-container").append("svg").attr("width", "100%").attr("height", "100%").style("background-color", "#0f172a");
+
+        svg.append("defs").append("marker").attr("id", "arrowhead").attr("viewBox", "0 -5 10 10").attr("refX", 5).attr("refY", 0).attr("markerWidth", 6).attr("markerHeight", 6).attr("orient", "auto").append("path").attr("d", "M0,-5L10,0L0,5").attr("fill", "#a855f7");
+
+        const gContainer = svg.append("g");
+        const brushG = gContainer.append("g").attr("class", "brush").style("display", "none");
+        const customLinksLayer = gContainer.append("g").attr("class", "custom-links-layer");
+
+        const zoom = d3.zoom().scaleExtent([0.1, 3]).on("zoom", (event) => gContainer.attr("transform", event.transform));
+        svg.call(zoom);
+
+        let rootData; 
+        const treemap = d3.tree().nodeSize([70, 260]);
+        let collapsedPaths = new Set(); let nodeOffsets = {}; let selectedNodes = new Set(); let customLinks = []; let nodesMap = new Map(); 
+        
+        let pathIdMap = new Map(); let pathIdCounter = 0;
+        function getStableId(path) { if (!pathIdMap.has(path)) pathIdMap.set(path, "n_" + (++pathIdCounter)); return pathIdMap.get(path); }
+
+        function parseTextToHierarchy(text) {
+            const lines = text.split('\n');
+            let rootNode = { name: "Mapa Mental", path: "root", children: [], id: "root_0", depth: -1 };
+            let stack = [{ depth: -1, node: rootNode }];
+
+            lines.forEach((line, index) => {
+                if (!line.trim()) return;
+                let depth = line.match(/^\t*/)[0].length;
+                let rawName = line.trim();
+                let name = rawName;
+                let isTask = false; let isDone = false;
+
+                if (name.startsWith('[ ] ')) { isTask = true; name = name.substring(4); }
+                else if (name.startsWith('[x] ') || name.startsWith('[X] ')) { isTask = true; isDone = true; name = name.substring(4); }
+                
+                while (stack.length > 1 && stack[stack.length - 1].depth >= depth) stack.pop();
+                let parent = stack[stack.length - 1].node;
+                let newNode = { name, originalRawName: rawName, path: parent.path + "||" + rawName, children: [], lineIndex: index, depth, isTask, isDone, totalTasks: 0, completedTasks: 0 };
+                parent.children.push(newNode);
+                stack.push({ depth, node: newNode });
+            });
+            
+            // Bottom-up progress rollup
+            function calcProgress(node) {
+                let t = 0, c = 0;
+                node.children.forEach(ch => { const st = calcProgress(ch); t += st.t; c += st.c; });
+                if(node.isTask) { t++; if(node.isDone) c++; }
+                node.totalTasks = t; node.completedTasks = c; return {t, c};
+            }
+            calcProgress(rootNode);
+
+            if (rootNode.children.length === 1) return rootNode.children[0]; 
+            return rootNode;
+        }
+
+        function toggleTaskState(lineIndex) {
+            const lines = editor.value.split('\n');
+            let txt = lines[lineIndex];
+            if(txt.includes('[ ] ')) txt = txt.replace('[ ] ', '[x] ');
+            else if(txt.includes('[x] ')) txt = txt.replace('[x] ', '[ ] ');
+            else if(txt.includes('[X] ')) txt = txt.replace('[X] ', '[ ] ');
+            lines[lineIndex] = txt; editor.value = lines.join('\n');
+            updateD3(editor.value); pushToHistory();
+        }
+
+        /* =========================================
+           5. D3 RENDER & INTERAÇÕES
+           ========================================= */
+        function wrapText(textSelection) {
+            textSelection.each(function(d) {
+                const text = d3.select(this);
+                const words = (d.data.name || " ").split(/\s+/).reverse();
+                let word, line = [], lineNumber = 0;
+                const lineHeight = 1.3; const maxWidth = 220; 
+
+                text.text(null);
+                const xOff = d.data.isTask ? 30 : 14; 
+                let tspan = text.append("tspan").attr("x", xOff).attr("dy", "0em");
+                let maxLineWidth = 0;
+
+                const getSafeWidth = n => { try { return n.getComputedTextLength() || 0; } catch(e) { return line.join(" ").length * 7.5; } };
+
+                while (word = words.pop()) {
+                    line.push(word); tspan.text(line.join(" "));
+                    let cw = getSafeWidth(tspan.node());
+                    if (cw > maxWidth && line.length > 1) {
+                        line.pop(); tspan.text(line.join(" "));
+                        maxLineWidth = Math.max(maxLineWidth, getSafeWidth(tspan.node()));
+                        line = [word]; tspan = text.append("tspan").attr("x", xOff).attr("dy", lineHeight + "em").text(word); lineNumber++;
+                    }
+                }
+                maxLineWidth = Math.max(maxLineWidth, getSafeWidth(tspan.node()));
+                
+                d.textLines = lineNumber + 1;
+                d.textWidth = maxLineWidth || 50;
+                d.rectHeight = Math.max(36, d.textLines * 16 + 20); 
+                d.rectWidth = Math.max(80, d.textWidth + xOff + 14 + (d.data.totalTasks>0? 30:0) + (favorites.has(d.data.path)? 24:0)); 
+
+                text.select("tspan").attr("y", -(d.textLines * 16 / 2) + 12);
+            });
+        }
+
+        function updateD3(text) {
+            rootData = d3.hierarchy(parseTextToHierarchy(text), d => d.children);
+            rootData.x0 = height / 2; rootData.y0 = 0;
+            rootData.each(d => { if (collapsedPaths.has(d.data.path)) { d._children = d.children; d.children = null; }});
+            render(rootData);
+        }
+
+        function render(source) {
+            const treeData = treemap(rootData);
+            const nodes = treeData.descendants();
+            nodesMap = new Map(nodes.map(n => { n.id = getStableId(n.data.path); return [n.id, n]; }));
+
+            const node = gContainer.selectAll('g.node').data(nodes, d => d.id);
+            const nodeEnter = node.enter().append('g').attr('class', 'node').attr('id', d => `node-g-${d.id}`).attr("transform", d => `translate(${source.y0||height/2},${source.x0||0})`).attr("cursor", "pointer");
+
+            const drag = d3.drag()
+                .on("start", function(event, d) {
+                    if (isConnectMode) return;
+                    if (!selectedNodes.has(d.id)) { selectedNodes.clear(); selectedNodes.add(d.id); updateNodeStyles(); }
+                    d3.select(this).raise().attr("cursor", "grabbing");
+                })
+                .on("drag", function(event, d) {
+                    if (isConnectMode) return;
+                    Array.from(selectedNodes).forEach(id => {
+                        let nd = nodesMap.get(id);
+                        if(nd) {
+                            let path = nd.data.path;
+                            if (!nodeOffsets[path]) nodeOffsets[path] = {dx: 0, dy: 0};
+                            nodeOffsets[path].dx += event.dy; nodeOffsets[path].dy += event.dx;
+                            nd.actualX = nd.x + nodeOffsets[path].dx; nd.actualY = nd.y + nodeOffsets[path].dy;
+                            gContainer.select(`#node-g-${id}`).attr("transform", `translate(${nd.actualY},${nd.actualX})`);
+                        }
+                    });
+                    gContainer.selectAll('path.link').attr('d', l => generateLinkPath(l)); renderCustomLinks();
+                })
+                .on("end", function(event, d) { if (!isConnectMode) { d3.select(this).attr("cursor", "pointer"); pushToHistory(); }});
+
+            nodeEnter.call(drag);
+
+            nodeEnter.append('rect').attr('class', 'node-rect').attr('rx', 6).attr('ry', 6).attr('fill', '#1e293b').attr('stroke-width', 2)
+                .on('click', function(event, d) {
+                    if (isConnectMode) {
+                        if (!connectSourceId) connectSourceId = d.id;
+                        else if (connectSourceId !== d.id && !customLinks.some(l => (l.source===connectSourceId && l.target===d.id) || (l.source===d.id && l.target===connectSourceId))) {
+                            customLinks.push({ source: connectSourceId, target: d.id, id: 'cl_' + Date.now() }); pushToHistory(); connectSourceId = null;
+                        } else { connectSourceId = null; }
+                        updateNodeStyles(); renderCustomLinks();
+                    } else if(selectedNodes.size === 1 && selectedNodes.has(d.id)) {
+                        // Deselect if already selected (simple click)
+                        // Actually, maintaining focus helps keyboard shortcuts.
+                    }
+                });
+
+            // Elementos visuais novos (Checkboxes, Textos, Estrelas, Pílulas)
+            const chkG = nodeEnter.append('g').attr('class', 'task-checkbox').attr('transform', 'translate(8, -7)').on('click', (e, d) => { e.stopPropagation(); toggleTaskState(d.data.lineIndex); });
+            chkG.append('rect').attr('width', 14).attr('height', 14).attr('rx', 3).attr('stroke', '#10b981').attr('stroke-width', 1.5).attr('fill', 'transparent');
+            chkG.append('path').attr('class', 'chk-mark').attr('d', 'M3 7 l3 3 l5 -5').attr('fill', 'none').attr('stroke', '#0f172a').attr('stroke-width', 2);
+
+            nodeEnter.append('text').attr('class', 'main-text').attr("fill", "#f1f5f9").attr("font-family", "Inter, sans-serif").attr("font-size", "14px").attr("font-weight", "500");
+            
+            nodeEnter.append('text').attr('class', 'prog-text').attr('font-size', '10px').attr('fill', '#94a3b8').attr('font-weight', '600').attr('y', 4);
+            nodeEnter.append('path').attr('class', 'fav-star').attr('d', 'M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z').attr('fill', '#fbbf24').attr('transform', 'scale(0.6)');
+            nodeEnter.append('circle').attr('class', 'child-toggle').attr('r', 5).on('click', (e, d) => { e.stopPropagation(); if (d.children) { d._children = d.children; d.children = null; collapsedPaths.add(d.data.path); } else if (d._children) { d.children = d._children; d._children = null; collapsedPaths.delete(d.data.path); } render(d); pushToHistory(); });
+
+            const nodeUpdate = nodeEnter.merge(node);
+
+            nodeUpdate.select('.main-text').call(wrapText);
+
+            nodes.forEach(d => {
+                if (d.depth === 0) d.y = 0; else d.y = (d.parent.y || 0) + (d.parent.rectWidth || 100) + 60; 
+                let offset = nodeOffsets[d.data.path] || {dx: 0, dy: 0}; d.actualX = (d.x || 0) + offset.dx; d.actualY = (d.y || 0) + offset.dy;
+            });
+
+            nodeUpdate.transition().duration(400).attr("transform", d => `translate(${d.actualY},${d.actualX})`);
+            nodeUpdate.select('.node-rect').attr('width', d => d.rectWidth).attr('height', d => d.rectHeight).attr('y', d => -d.rectHeight / 2);
+            nodeUpdate.select('.child-toggle').attr('cx', d => d.rectWidth).attr('cy', 0).style('display', d => (d.children || d._children) ? 'block' : 'none');
+            
+            // Updates Visuais dos Novos Elementos
+            nodeUpdate.select('.task-checkbox').style('display', d => d.data.isTask ? 'block' : 'none');
+            nodeUpdate.select('.task-checkbox rect').attr('fill', d => d.data.isDone ? '#10b981' : 'transparent');
+            nodeUpdate.select('.chk-mark').style('display', d => d.data.isDone ? 'block' : 'none');
+            
+            nodeUpdate.select('.prog-text').style('display', d => (!d.data.isTask && d.data.totalTasks > 0) ? 'block' : 'none').text(d => `${d.data.completedTasks}/${d.data.totalTasks}`).attr('x', d => d.rectWidth - (favorites.has(d.data.path)?48:26));
+            nodeUpdate.select('.fav-star').style('display', d => favorites.has(d.data.path) ? 'block' : 'none').attr('transform', d => `translate(${d.rectWidth - 18}, -8) scale(0.6)`);
+
+            updateNodeStyles(); 
+
+            const nodeExit = node.exit().transition().duration(400).attr("transform", d => `translate(${source.actualY || 0},${source.actualX || 0})`).remove();
+            nodeExit.select('rect').attr('width', 0).attr('height', 0); nodeExit.select('.main-text').style('fill-opacity', 0);
+
+            const link = gContainer.selectAll('path.link').data(treeData.links(), d => d.target.id);
+            const linkEnter = link.enter().insert('path', ".custom-links-layer").attr("class", "link").attr("fill", "none").attr("stroke", "#475569").attr("stroke-width", 2)
+                .attr('d', d => generateLinkPath({source: {actualX: source.x0||0, actualY: source.y0||0, rectWidth:0}, target: {actualX: source.x0||0, actualY: source.y0||0}}));
+            linkEnter.merge(link).transition().duration(400).attr('d', d => generateLinkPath(d));
+            link.exit().transition().duration(400).remove();
+
+            nodes.forEach(d => { d.x0 = d.actualX; d.y0 = d.actualY; }); renderCustomLinks();
+        }
+
+        function generateLinkPath(d) {
+            const sy = (d.source.actualY || 0) + (d.source.rectWidth || 0), sx = d.source.actualX || 0;
+            const ey = d.target.actualY || 0, ex = d.target.actualX || 0;
+            return `M ${sy} ${sx} C ${(sy + ey)/2} ${sx}, ${(sy + ey)/2} ${ex}, ${ey} ${ex}`;
+        }
+
+        function renderCustomLinks() {
+            customLinks = customLinks.filter(l => nodesMap.has(l.source) && nodesMap.has(l.target));
+            const p = customLinksLayer.selectAll('path.custom-link-path').data(customLinks, d => d.id);
+            const e = p.enter().append('path').attr('class', 'custom-link-path').attr('marker-end', 'url(#arrowhead)').on('click', (ev, d) => { if(confirm("Remover conexão?")) { customLinks = customLinks.filter(l => l.id !== d.id); pushToHistory(); renderCustomLinks(); } });
+            e.merge(p).attr('d', d => {
+                const s = nodesMap.get(d.source), t = nodesMap.get(d.target); if (!s || !t) return "";
+                const sx = s.actualY + (t.actualY > s.actualY ? s.rectWidth : 0), sy = s.actualX;
+                const tx = t.actualY + (s.actualY > t.actualY ? t.rectWidth : 0), ty = t.actualX;
+                return `M ${sx} ${sy} C ${(sx+tx)/2} ${sy}, ${(sx+tx)/2} ${ty}, ${tx + (s.actualY > t.actualY ? 8 : -8)} ${ty}`;
+            });
+            p.exit().remove();
+        }
+
+        function updateNodeStyles() {
+            gContainer.selectAll('.node').style('opacity', d => (isFavFilterActive && !favorites.has(d.data.path)) ? 0.3 : 1);
+            gContainer.selectAll('.node-rect')
+                .attr('stroke', d => {
+                    if (searchQuery && d.data.name.toLowerCase().includes(searchQuery)) return '#10b981'; // Green Highlight
+                    if (connectSourceId === d.id) return '#a855f7'; 
+                    if (selectedNodes.has(d.id)) return '#fbbf24';  
+                    return d._children ? '#60a5fa' : '#334155';     
+                }) 
+                .attr('stroke-width', d => (selectedNodes.has(d.id) || connectSourceId === d.id || (searchQuery && d.data.name.toLowerCase().includes(searchQuery))) ? 3 : 2);
+            gContainer.selectAll('.child-toggle').attr('fill', d => d._children ? '#3b82f6' : (d.children ? '#475569' : 'none'));
+        }
+
+        function centerMapOnNode(node) {
+            if(!node) return;
+            const w = container.clientWidth, h = container.clientHeight;
+            svg.transition().duration(400).call(zoom.transform, d3.zoomIdentity.translate(w/2 - node.actualY, h/2 - node.actualX).scale(1.2));
+        }
+        function centerMap() { if(!rootData) return; svg.transition().duration(500).call(zoom.transform, d3.zoomIdentity.translate(50, container.clientHeight / 2 - rootData.actualX).scale(1)); }
+
+        /* =========================================
+           6. FERRAMENTAS & SELEÇÃO
+           ========================================= */
+        let isSelectMode = false, isConnectMode = false, connectSourceId = null;
+
+        function deactivateTools() {
+            isSelectMode = false; isConnectMode = false; connectSourceId = null;
+            document.getElementById('btn-select-mode').classList.replace('bg-blue-600', 'text-slate-400'); document.getElementById('btn-select-mode').classList.remove('text-white');
+            document.getElementById('btn-connect-mode').classList.replace('bg-purple-600', 'text-slate-400'); document.getElementById('btn-connect-mode').classList.remove('text-white');
+            brushG.style("display", "none"); svg.call(zoom); 
+            container.classList.remove('cursor-crosshair', 'connect-mode-active'); container.classList.add('cursor-grab', 'active:cursor-grabbing');
+            updateNodeStyles();
+        }
+        
+        const brush = d3.brush().extent([[-10000, -10000], [10000, 10000]]).on("end", (event) => {
+            if (!event.sourceEvent) return; 
+            if (!event.selection) selectedNodes.clear();
+            else {
+                const [[x0, y0], [x1, y1]] = event.selection; selectedNodes.clear();
+                nodesMap.forEach((d, id) => { if ((d.actualY+d.rectWidth) >= x0 && d.actualY <= x1 && (d.actualX+d.rectHeight/2) >= y0 && (d.actualX-d.rectHeight/2) <= y1) selectedNodes.add(id); });
+                brushG.call(brush.move, null);
+            }
+            updateNodeStyles();
+        });
+
+        document.getElementById('btn-select-mode').addEventListener('click', (e) => { const a = isSelectMode; deactivateTools(); if (!a) { isSelectMode = true; e.currentTarget.classList.add('bg-blue-600', 'text-white'); e.currentTarget.classList.remove('text-slate-400'); svg.on(".zoom", null); brushG.style("display", "block").call(brush); container.className = "w-full h-full cursor-crosshair"; } });
+        document.getElementById('btn-connect-mode').addEventListener('click', (e) => { const a = isConnectMode; deactivateTools(); if (!a) { isConnectMode = true; e.currentTarget.classList.add('bg-purple-600', 'text-white'); e.currentTarget.classList.remove('text-slate-400'); svg.on(".zoom", null); container.className = "w-full h-full connect-mode-active"; } });
+        document.getElementById('btn-auto-layout').addEventListener('click', () => { nodeOffsets = {}; selectedNodes.clear(); updateD3(editor.value); pushToHistory(); setTimeout(centerMap, 450); });
+
+        /* =========================================
+           7. EVENTOS DE MENU (Import, Export, Clear)
+           ========================================= */
+        document.getElementById('btn-clear').addEventListener('click', () => { if(confirm('Limpar todo o mapa?')) { editor.value = "Tópico Central\n"; nodeOffsets = {}; customLinks = []; favorites.clear(); collapsedPaths.clear(); selectedNodes.clear(); currentFileHandle = null; triggerUpdate(); } });
+        
+        const fileInput = document.getElementById('file-input');
+        document.getElementById('btn-import').addEventListener('click', async () => {
+            if ('showOpenFilePicker' in window) {
+                try {
+                    const [fh] = await window.showOpenFilePicker({types: [{ description: 'Mind Map JSON', accept: { 'application/json': ['.json'] } }]});
+                    currentFileHandle = fh; loadMapData(await (await fh.getFile()).text());
+                } catch (e) {}
+            } else fileInput.click();
+        });
+        fileInput.addEventListener('change', (e) => { const f = e.target.files[0]; if (!f) return; const r = new FileReader(); r.onload = (ev) => loadMapData(ev.target.result); r.readAsText(f); currentFileHandle = null; });
+        function loadMapData(j) { try { const d = JSON.parse(j); editor.value = d.text || "Falha"; nodeOffsets = d.offsets ? JSON.parse(d.offsets) : {}; customLinks = d.customLinks ? JSON.parse(d.customLinks) : []; favorites = new Set(JSON.parse(d.favorites || '[]')); triggerUpdate(); } catch(e) { alert('Erro'); } }
+
+        document.getElementById('btn-save').addEventListener('click', () => saveMap(false));
+        document.getElementById('btn-save-as').addEventListener('click', () => saveMap(true));
+
+        /* =========================================
+           8. INICIALIZAÇÃO
+           ========================================= */
+        window.onload = async () => {
+            const s = await loadStateFromDB();
+            if (s && typeof s === 'object' && s.text) { editor.value = s.text; nodeOffsets = s.offsets ? JSON.parse(s.offsets) : {}; customLinks = s.customLinks ? JSON.parse(s.customLinks) : []; favorites = new Set(JSON.parse(s.favorites || '[]')); } 
+            else if (typeof s === 'string') editor.value = s; 
+            else editor.value = DEFAULT_TEXT;
+            updateD3(editor.value); pushToHistory(true); setTimeout(centerMap, 150);
+        };
+        window.addEventListener('resize', () => { width = container.clientWidth; height = container.clientHeight; });
+    </script>
+</body>
+</html>
