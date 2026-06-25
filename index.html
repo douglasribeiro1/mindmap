@@ -46,6 +46,55 @@
         #search-bar.hidden-up { transform: translateY(-150%) translateX(-50%); opacity: 0; pointer-events: none; }
         
         .task-checkbox:hover rect { stroke: #10b981; fill-opacity: 0.2; }
+
+        /* ESTILOS DE IMPRESSÃO (PDF EXPORT) */
+        @media print {
+            @page {
+                size: landscape;
+                margin: 0;
+            }
+            body, html, #main-panel {
+                background-color: white !important;
+                height: 100% !important;
+                width: 100% !important;
+            }
+            /* Esconder elementos de UI */
+            #sidebar, #search-bar, .absolute.top-4 {
+                display: none !important;
+            }
+            /* Reset visual do SVG para P&B / Tons Claros */
+            svg {
+                background-color: white !important;
+            }
+            .node-rect {
+                fill: white !important;
+                stroke: black !important;
+                stroke-width: 1.5px !important;
+            }
+            .node-rect[data-depth="0"] {
+                fill: #f1f5f9 !important; /* Cinza claro para o nó central */
+                stroke-width: 2px !important;
+            }
+            .main-text, .prog-text {
+                fill: black !important;
+            }
+            .link, .custom-link-path {
+                stroke: #334155 !important;
+            }
+            .child-toggle {
+                fill: white !important;
+                stroke: black !important;
+            }
+            .task-checkbox rect {
+                stroke: black !important;
+            }
+            .chk-mark {
+                stroke: black !important;
+            }
+            .fav-star {
+                fill: #64748b !important;
+            }
+        }
     </style>
 </head>
 <body class="flex h-screen w-screen relative">
@@ -121,6 +170,9 @@
                     <i data-lucide="download" class="w-4 h-4"></i> <span class="hidden xl:inline">Salvar Como</span>
                 </button>
                 <hr class="border-slate-700">
+                <button id="btn-pdf" class="p-2 text-slate-300 hover:text-white hover:bg-slate-700 rounded-lg transition text-left flex items-center gap-3 text-sm" title="Exportar para PDF">
+                    <i data-lucide="file-text" class="w-4 h-4"></i> <span class="hidden xl:inline">Exportar PDF</span>
+                </button>
                 <button id="btn-clear" class="p-2 text-red-400 hover:text-red-300 hover:bg-slate-700 rounded-lg transition text-left flex items-center gap-3 text-sm" title="Limpar">
                     <i data-lucide="trash-2" class="w-4 h-4"></i> <span class="hidden xl:inline">Limpar</span>
                 </button>
@@ -132,7 +184,6 @@
 
     <!-- PWA Injection Block -->
     <script>
-        // Gerador Dinâmico de Manifest e Service Worker PWA (Requisito Arquivo Único)
         const pwaManifest = {
             name: "MindMap Pro Premium",
             short_name: "MindMap",
@@ -149,7 +200,6 @@
         const manifestUrl = URL.createObjectURL(new Blob([JSON.stringify(pwaManifest)], {type: 'application/manifest+json'}));
         document.head.insertAdjacentHTML('beforeend', `<link rel="manifest" href="${manifestUrl}">`);
 
-        // Service worker embutido para caches base (Intercepta chamadas mantendo offline ativo)
         const swScript = `
             const CACHE = 'mindmap-pro-v1';
             self.addEventListener('install', e => self.skipWaiting());
@@ -160,7 +210,7 @@
         `;
         if ('serviceWorker' in navigator) {
             const swUrl = URL.createObjectURL(new Blob([swScript], {type: 'application/javascript'}));
-            navigator.serviceWorker.register(swUrl).catch(e => console.log('SW Registration fallback (expected on local files).'));
+            navigator.serviceWorker.register(swUrl).catch(e => console.log('SW Registration fallback.'));
         }
     </script>
 
@@ -325,7 +375,6 @@
         let debounceTimer;
         editor.addEventListener('input', () => { clearTimeout(debounceTimer); debounceTimer = setTimeout(() => { updateD3(editor.value); pushToHistory(); }, 300); });
         
-        // Comportamento do Tab no Editor (Inserir Espaçamento)
         editor.addEventListener('keydown', function(e) {
             if (e.key === 'Tab') { e.preventDefault(); const s = this.selectionStart, e_pos = this.selectionEnd; this.value = this.value.substring(0, s) + "\t" + this.value.substring(e_pos); this.selectionStart = this.selectionEnd = s + 1; updateD3(editor.value); pushToHistory(); }
         });
@@ -340,48 +389,54 @@
             if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && !e.shiftKey) { e.preventDefault(); undo(); return; }
             if ((e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === 'y' || (e.shiftKey && e.key.toLowerCase() === 'z'))) { e.preventDefault(); redo(); return; }
 
-            // Atalhos diretos de Canvas (Apenas se Editor e Busca não estiverem ativos)
             if (document.activeElement === editor || document.activeElement === searchInput) return;
 
-            // Favoritos (Ciclo)
             if (e.altKey && e.key.toLowerCase() === 'f') {
                 e.preventDefault();
                 const favs = Array.from(nodesMap.values()).filter(n => favorites.has(n.data.path));
                 if(favs.length) {
-                    let cIdx = favs.findIndex(n => selectedNodes.has(n.id));
+                    let cIdx = favs.findIndex(n => selectedNodes.has(n.data.path));
                     cIdx = e.shiftKey ? (cIdx <= 0 ? favs.length - 1 : cIdx - 1) : ((cIdx + 1) % favs.length);
-                    selectedNodes.clear(); selectedNodes.add(favs[cIdx].id); centerMapOnNode(favs[cIdx]); updateNodeStyles();
+                    selectedNodes.clear(); selectedNodes.add(favs[cIdx].data.path); centerMapOnNode(favs[cIdx]); updateNodeStyles();
                 }
                 return;
             }
 
             if (selectedNodes.size === 1) {
-                const n = nodesMap.get(Array.from(selectedNodes)[0]);
+                const pathTarget = Array.from(selectedNodes)[0];
+                const n = nodesMap.get(pathTarget);
                 if (!n) return;
                 const lines = editor.value.split('\n');
                 const idx = n.data.lineIndex;
                 const depth = n.data.depth;
 
-                // F: Favoritar
                 if (e.key.toLowerCase() === 'f' && !e.ctrlKey && !e.altKey && !e.shiftKey) {
                     e.preventDefault();
                     if(favorites.has(n.data.path)) favorites.delete(n.data.path); else favorites.add(n.data.path);
                     pushToHistory(); updateD3(editor.value); return;
                 }
 
-                // F2: Renomear
                 if (e.key === 'F2') {
                     e.preventDefault();
                     const oldText = n.data.originalRawName || n.data.name;
                     const novo = prompt("Renomear tópico:", oldText);
                     if (novo !== null && novo.trim() !== "") {
                         lines[idx] = '\t'.repeat(depth) + novo;
-                        editor.value = lines.join('\n'); updateD3(editor.value); pushToHistory();
+                        editor.value = lines.join('\n'); 
+                        
+                        const oldPath = n.data.path;
+                        const newPath = oldPath.substring(0, oldPath.lastIndexOf('||') + 2) + novo.trim();
+                        
+                        customLinks.forEach(l => { if(l.source === oldPath) l.source = newPath; if(l.target === oldPath) l.target = newPath; });
+                        if (nodeOffsets[oldPath]) { nodeOffsets[newPath] = nodeOffsets[oldPath]; delete nodeOffsets[oldPath]; }
+                        if (favorites.has(oldPath)) { favorites.delete(oldPath); favorites.add(newPath); }
+                        if (selectedNodes.has(oldPath)) { selectedNodes.delete(oldPath); selectedNodes.add(newPath); }
+                        
+                        updateD3(editor.value); pushToHistory();
                     }
                     return;
                 }
 
-                // Enter: Irmão
                 if (e.key === 'Enter') {
                     e.preventDefault();
                     let target = idx + 1;
@@ -390,7 +445,6 @@
                     editor.value = lines.join('\n'); updateD3(editor.value); pushToHistory(); return;
                 }
 
-                // Tab / Shift+Tab: Filho / Recuo
                 if (e.key === 'Tab') {
                     e.preventDefault();
                     if (e.shiftKey) {
@@ -401,7 +455,6 @@
                     editor.value = lines.join('\n'); updateD3(editor.value); pushToHistory(); return;
                 }
 
-                // Delete: Remover (e filhos associados no texto)
                 if (e.key === 'Delete') {
                     e.preventDefault();
                     let endIdx = idx + 1;
@@ -457,7 +510,6 @@
                 stack.push({ depth, node: newNode });
             });
             
-            // Bottom-up progress rollup
             function calcProgress(node) {
                 let t = 0, c = 0;
                 node.children.forEach(ch => { const st = calcProgress(ch); t += st.t; c += st.c; });
@@ -527,7 +579,7 @@
         function render(source) {
             const treeData = treemap(rootData);
             const nodes = treeData.descendants();
-            nodesMap = new Map(nodes.map(n => { n.id = getStableId(n.data.path); return [n.id, n]; }));
+            nodesMap = new Map(nodes.map(n => { n.id = getStableId(n.data.path); return [n.data.path, n]; }));
 
             const node = gContainer.selectAll('g.node').data(nodes, d => d.id);
             const nodeEnter = node.enter().append('g').attr('class', 'node').attr('id', d => `node-g-${d.id}`).attr("transform", d => `translate(${source.y0||height/2},${source.x0||0})`).attr("cursor", "pointer");
@@ -535,19 +587,19 @@
             const drag = d3.drag()
                 .on("start", function(event, d) {
                     if (isConnectMode) return;
-                    if (!selectedNodes.has(d.id)) { selectedNodes.clear(); selectedNodes.add(d.id); updateNodeStyles(); }
+                    if (!selectedNodes.has(d.data.path)) { selectedNodes.clear(); selectedNodes.add(d.data.path); updateNodeStyles(); }
                     d3.select(this).raise().attr("cursor", "grabbing");
                 })
                 .on("drag", function(event, d) {
                     if (isConnectMode) return;
-                    Array.from(selectedNodes).forEach(id => {
-                        let nd = nodesMap.get(id);
+                    Array.from(selectedNodes).forEach(path => {
+                        let nd = nodesMap.get(path);
                         if(nd) {
-                            let path = nd.data.path;
-                            if (!nodeOffsets[path]) nodeOffsets[path] = {dx: 0, dy: 0};
-                            nodeOffsets[path].dx += event.dy; nodeOffsets[path].dy += event.dx;
-                            nd.actualX = nd.x + nodeOffsets[path].dx; nd.actualY = nd.y + nodeOffsets[path].dy;
-                            gContainer.select(`#node-g-${id}`).attr("transform", `translate(${nd.actualY},${nd.actualX})`);
+                            let p = nd.data.path;
+                            if (!nodeOffsets[p]) nodeOffsets[p] = {dx: 0, dy: 0};
+                            nodeOffsets[p].dx += event.dy; nodeOffsets[p].dy += event.dx;
+                            nd.actualX = nd.x + nodeOffsets[p].dx; nd.actualY = nd.y + nodeOffsets[p].dy;
+                            gContainer.select(`#node-g-${nd.id}`).attr("transform", `translate(${nd.actualY},${nd.actualX})`);
                         }
                     });
                     gContainer.selectAll('path.link').attr('d', l => generateLinkPath(l)); renderCustomLinks();
@@ -556,21 +608,18 @@
 
             nodeEnter.call(drag);
 
-            nodeEnter.append('rect').attr('class', 'node-rect').attr('rx', 6).attr('ry', 6).attr('fill', '#1e293b').attr('stroke-width', 2)
+            // Adicionado 'data-depth' para estilizá-lo especificamente na exportação em PDF
+            nodeEnter.append('rect').attr('class', 'node-rect').attr('data-depth', d => d.depth).attr('rx', 6).attr('ry', 6).attr('fill', '#1e293b').attr('stroke-width', 2)
                 .on('click', function(event, d) {
                     if (isConnectMode) {
-                        if (!connectSourceId) connectSourceId = d.id;
-                        else if (connectSourceId !== d.id && !customLinks.some(l => (l.source===connectSourceId && l.target===d.id) || (l.source===d.id && l.target===connectSourceId))) {
-                            customLinks.push({ source: connectSourceId, target: d.id, id: 'cl_' + Date.now() }); pushToHistory(); connectSourceId = null;
-                        } else { connectSourceId = null; }
+                        if (!connectSourcePath) connectSourcePath = d.data.path;
+                        else if (connectSourcePath !== d.data.path && !customLinks.some(l => (l.source===connectSourcePath && l.target===d.data.path) || (l.source===d.data.path && l.target===connectSourcePath))) {
+                            customLinks.push({ source: connectSourcePath, target: d.data.path, id: 'cl_' + Date.now() }); pushToHistory(); connectSourcePath = null;
+                        } else { connectSourcePath = null; }
                         updateNodeStyles(); renderCustomLinks();
-                    } else if(selectedNodes.size === 1 && selectedNodes.has(d.id)) {
-                        // Deselect if already selected (simple click)
-                        // Actually, maintaining focus helps keyboard shortcuts.
                     }
                 });
 
-            // Elementos visuais novos (Checkboxes, Textos, Estrelas, Pílulas)
             const chkG = nodeEnter.append('g').attr('class', 'task-checkbox').attr('transform', 'translate(8, -7)').on('click', (e, d) => { e.stopPropagation(); toggleTaskState(d.data.lineIndex); });
             chkG.append('rect').attr('width', 14).attr('height', 14).attr('rx', 3).attr('stroke', '#10b981').attr('stroke-width', 1.5).attr('fill', 'transparent');
             chkG.append('path').attr('class', 'chk-mark').attr('d', 'M3 7 l3 3 l5 -5').attr('fill', 'none').attr('stroke', '#0f172a').attr('stroke-width', 2);
@@ -594,7 +643,6 @@
             nodeUpdate.select('.node-rect').attr('width', d => d.rectWidth).attr('height', d => d.rectHeight).attr('y', d => -d.rectHeight / 2);
             nodeUpdate.select('.child-toggle').attr('cx', d => d.rectWidth).attr('cy', 0).style('display', d => (d.children || d._children) ? 'block' : 'none');
             
-            // Updates Visuais dos Novos Elementos
             nodeUpdate.select('.task-checkbox').style('display', d => d.data.isTask ? 'block' : 'none');
             nodeUpdate.select('.task-checkbox rect').attr('fill', d => d.data.isDone ? '#10b981' : 'transparent');
             nodeUpdate.select('.chk-mark').style('display', d => d.data.isDone ? 'block' : 'none');
@@ -639,12 +687,12 @@
             gContainer.selectAll('.node').style('opacity', d => (isFavFilterActive && !favorites.has(d.data.path)) ? 0.3 : 1);
             gContainer.selectAll('.node-rect')
                 .attr('stroke', d => {
-                    if (searchQuery && d.data.name.toLowerCase().includes(searchQuery)) return '#10b981'; // Green Highlight
-                    if (connectSourceId === d.id) return '#a855f7'; 
-                    if (selectedNodes.has(d.id)) return '#fbbf24';  
+                    if (searchQuery && d.data.name.toLowerCase().includes(searchQuery)) return '#10b981'; 
+                    if (connectSourcePath === d.data.path) return '#a855f7'; 
+                    if (selectedNodes.has(d.data.path)) return '#fbbf24';  
                     return d._children ? '#60a5fa' : '#334155';     
                 }) 
-                .attr('stroke-width', d => (selectedNodes.has(d.id) || connectSourceId === d.id || (searchQuery && d.data.name.toLowerCase().includes(searchQuery))) ? 3 : 2);
+                .attr('stroke-width', d => (selectedNodes.has(d.data.path) || connectSourcePath === d.data.path || (searchQuery && d.data.name.toLowerCase().includes(searchQuery))) ? 3 : 2);
             gContainer.selectAll('.child-toggle').attr('fill', d => d._children ? '#3b82f6' : (d.children ? '#475569' : 'none'));
         }
 
@@ -656,12 +704,12 @@
         function centerMap() { if(!rootData) return; svg.transition().duration(500).call(zoom.transform, d3.zoomIdentity.translate(50, container.clientHeight / 2 - rootData.actualX).scale(1)); }
 
         /* =========================================
-           6. FERRAMENTAS & SELEÇÃO
+           6. FERRAMENTAS & EXPORTAÇÕES
            ========================================= */
-        let isSelectMode = false, isConnectMode = false, connectSourceId = null;
+        let isSelectMode = false, isConnectMode = false, connectSourcePath = null;
 
         function deactivateTools() {
-            isSelectMode = false; isConnectMode = false; connectSourceId = null;
+            isSelectMode = false; isConnectMode = false; connectSourcePath = null;
             document.getElementById('btn-select-mode').classList.replace('bg-blue-600', 'text-slate-400'); document.getElementById('btn-select-mode').classList.remove('text-white');
             document.getElementById('btn-connect-mode').classList.replace('bg-purple-600', 'text-slate-400'); document.getElementById('btn-connect-mode').classList.remove('text-white');
             brushG.style("display", "none"); svg.call(zoom); 
@@ -674,7 +722,7 @@
             if (!event.selection) selectedNodes.clear();
             else {
                 const [[x0, y0], [x1, y1]] = event.selection; selectedNodes.clear();
-                nodesMap.forEach((d, id) => { if ((d.actualY+d.rectWidth) >= x0 && d.actualY <= x1 && (d.actualX+d.rectHeight/2) >= y0 && (d.actualX-d.rectHeight/2) <= y1) selectedNodes.add(id); });
+                nodesMap.forEach((d, path) => { if ((d.actualY+d.rectWidth) >= x0 && d.actualY <= x1 && (d.actualX+d.rectHeight/2) >= y0 && (d.actualX-d.rectHeight/2) <= y1) selectedNodes.add(path); });
                 brushG.call(brush.move, null);
             }
             updateNodeStyles();
@@ -684,9 +732,29 @@
         document.getElementById('btn-connect-mode').addEventListener('click', (e) => { const a = isConnectMode; deactivateTools(); if (!a) { isConnectMode = true; e.currentTarget.classList.add('bg-purple-600', 'text-white'); e.currentTarget.classList.remove('text-slate-400'); svg.on(".zoom", null); container.className = "w-full h-full connect-mode-active"; } });
         document.getElementById('btn-auto-layout').addEventListener('click', () => { nodeOffsets = {}; selectedNodes.clear(); updateD3(editor.value); pushToHistory(); setTimeout(centerMap, 450); });
 
-        /* =========================================
-           7. EVENTOS DE MENU (Import, Export, Clear)
-           ========================================= */
+        // Evento PDF Export
+        document.getElementById('btn-pdf').addEventListener('click', () => {
+            // Guarda o estado de zoom atual
+            const currentTransform = d3.zoomTransform(svg.node());
+            
+            // Pega a caixa de tamanho total contendo os nós
+            const bBox = gContainer.node().getBBox();
+            const padding = 60;
+            
+            // Reajusta temporariamente o ViewBox para focar exclusivamente no mapa 
+            svg.attr("viewBox", `${bBox.x - padding} ${bBox.y - padding} ${bBox.width + padding*2} ${bBox.height + padding*2}`);
+            gContainer.attr("transform", null); 
+
+            // Dá tempo do navegador processar o resize e chama o print
+            setTimeout(() => {
+                window.print(); // O CSS @media print formata como você pediu
+
+                // Restaura o zoom original logo após a tela fechar
+                svg.attr("viewBox", null);
+                gContainer.attr("transform", currentTransform);
+            }, 150);
+        });
+
         document.getElementById('btn-clear').addEventListener('click', () => { if(confirm('Limpar todo o mapa?')) { editor.value = "Tópico Central\n"; nodeOffsets = {}; customLinks = []; favorites.clear(); collapsedPaths.clear(); selectedNodes.clear(); currentFileHandle = null; triggerUpdate(); } });
         
         const fileInput = document.getElementById('file-input');
