@@ -42,6 +42,26 @@
             --gutter-bg: #1e293b;
         }
 
+        /* Paletas Adicionais */
+        [data-palette="ocean"] {
+            --node-bg: #e0f2fe; --node-border: #7dd3fc; --primary: #0284c7; --line-color: #38bdf8; --sel-color: rgba(2, 132, 199, 0.2); --node-text: #0c4a6e;
+        }
+        [data-theme="dark"][data-palette="ocean"] {
+            --node-bg: #0c4a6e; --node-border: #0369a1; --primary: #38bdf8; --line-color: #0284c7; --sel-color: rgba(56, 189, 248, 0.3); --node-text: #e0f2fe;
+        }
+        [data-palette="sunset"] {
+            --node-bg: #ffedd5; --node-border: #fdba74; --primary: #ea580c; --line-color: #fb923c; --sel-color: rgba(234, 88, 12, 0.2); --node-text: #7c2d12;
+        }
+        [data-theme="dark"][data-palette="sunset"] {
+            --node-bg: #7c2d12; --node-border: #c2410c; --primary: #fb923c; --line-color: #ea580c; --sel-color: rgba(251, 146, 60, 0.3); --node-text: #ffedd5;
+        }
+        [data-palette="nature"] {
+            --node-bg: #dcfce7; --node-border: #86efac; --primary: #16a34a; --line-color: #4ade80; --sel-color: rgba(22, 163, 74, 0.2); --node-text: #14532d;
+        }
+        [data-theme="dark"][data-palette="nature"] {
+            --node-bg: #14532d; --node-border: #15803d; --primary: #4ade80; --line-color: #16a34a; --sel-color: rgba(74, 222, 128, 0.3); --node-text: #dcfce7;
+        }
+
         * { box-sizing: border-box; margin: 0; padding: 0; }
         
         body, html {
@@ -123,15 +143,6 @@
 
         canvas { display: block; width: 100%; height: 100%; outline: none; }
 
-        /* Minimapa */
-        #minimap {
-            position: absolute; bottom: 20px; right: 20px;
-            width: 200px; height: 150px;
-            background: var(--panel-bg); border: 1px solid var(--border-color);
-            border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-            overflow: hidden; cursor: crosshair;
-        }
-
         /* Status / Notificações */
         #status-bar {
             position: absolute; bottom: 20px; left: 20px;
@@ -152,7 +163,7 @@
         .menu-item:hover { background: var(--primary); color: white; }
 
         @media print {
-            .toolbar, #left-panel, #minimap { display: none !important; }
+            .toolbar, #left-panel { display: none !important; }
             #app { height: auto; }
             #right-panel { width: 100%; height: 100vh; margin: 0; }
         }
@@ -173,6 +184,19 @@
                 <option value="vertical">Árvore Vertical</option>
                 <option value="radial">Radial</option>
             </select>
+            <select id="line-select" onchange="app.changeLineStyle(this.value)">
+                <option value="curva">Linhas Curvas</option>
+                <option value="reta">Linhas Retas</option>
+                <option value="seta_curva">Setas Curvas</option>
+                <option value="seta_reta">Setas Retas</option>
+            </select>
+            <select id="palette-select" onchange="app.changePalette(this.value)">
+                <option value="padrao">Paleta Padrão</option>
+                <option value="ocean">Paleta Ocean</option>
+                <option value="sunset">Paleta Sunset</option>
+                <option value="nature">Paleta Nature</option>
+            </select>
+            <button onclick="app.reorganize()">Reorganizar</button>
             <button onclick="app.centerMap()">Centrar (Espaço)</button>
             <button onclick="app.exportMenu()">Exportar</button>
             <button onclick="app.toggleTheme()">🌓 Tema</button>
@@ -197,13 +221,14 @@
         <!-- Direita: Canvas -->
         <div id="right-panel">
             <canvas id="main-canvas" tabindex="0"></canvas>
-            <canvas id="minimap"></canvas>
             <div id="status-bar">Salvo com sucesso!</div>
         </div>
     </div>
 
     <!-- Menu de Contexto Invisível -->
     <div id="context-menu">
+        <div class="menu-item" onclick="app.createConnection()">Ligar Selecionados</div>
+        <hr style="border:0; border-bottom:1px solid var(--border-color); margin: 4px 0;">
         <div class="menu-item" onclick="app.changeNodeColor('#ef4444')">Cor Vermelha</div>
         <div class="menu-item" onclick="app.changeNodeColor('#3b82f6')">Cor Azul</div>
         <div class="menu-item" onclick="app.changeNodeColor('#22c55e')">Cor Verde</div>
@@ -240,9 +265,11 @@
             tree: null,
             flatNodes: [], // Para iteração rápida e hit detection
             meta: {}, // Armazena posições manuais, cores, nós recolhidos: { pathId: { color, x, y, collapsed } }
-            connections: [], // Ligações extras
+            connections: [], // Ligações extras {from: id, to: id}
             layout: 'horizontal',
             theme: 'light',
+            lineStyle: 'curva', // 'reta', 'curva', 'seta_reta', 'seta_curva'
+            palette: 'padrao',
             
             // Canvas Viewport
             camera: { x: 0, y: 0, zoom: 1 },
@@ -271,15 +298,12 @@
         const app = {
             canvas: document.getElementById('main-canvas'),
             ctx: null,
-            minimap: document.getElementById('minimap'),
-            miniCtx: null,
             editor: document.getElementById('text-editor'),
             gutter: document.getElementById('gutter'),
             needsRender: true,
 
             init() {
                 this.ctx = this.canvas.getContext('2d', { alpha: false });
-                this.miniCtx = this.minimap.getContext('2d', { alpha: false });
                 
                 this.resizeCanvas();
                 window.addEventListener('resize', () => this.resizeCanvas());
@@ -500,7 +524,6 @@
             renderLoop() {
                 if (this.needsRender) {
                     this.drawCanvas();
-                    this.drawMinimap();
                     this.needsRender = false;
                 }
                 requestAnimationFrame(() => this.renderLoop());
@@ -529,6 +552,20 @@
                 ctx.scale(State.camera.zoom, State.camera.zoom);
                 ctx.translate(State.camera.x, State.camera.y);
 
+                // Helper para cabeças de seta
+                const drawArrowHead = (x, y, angle) => {
+                    ctx.save();
+                    ctx.translate(x, y);
+                    ctx.rotate(angle);
+                    ctx.fillStyle = ctx.strokeStyle;
+                    ctx.beginPath();
+                    ctx.moveTo(0, 0);
+                    ctx.lineTo(-10, -5);
+                    ctx.lineTo(-10, 5);
+                    ctx.fill();
+                    ctx.restore();
+                };
+
                 // Draw Edges
                 ctx.strokeStyle = lineColor;
                 ctx.lineWidth = 2;
@@ -541,16 +578,102 @@
                         const nx = node.x + node.width / 2;
                         const ny = node.y + node.height / 2;
                         
+                        // Ajustar o ponto alvo para a borda do nó alvo (útil para as setas)
+                        let targetX = nx;
+                        let targetY = ny;
+                        if (State.layout === 'horizontal') targetX = nx > px ? node.x : node.x + node.width;
+                        else if (State.layout === 'vertical') targetY = ny > py ? node.y : node.y + node.height;
+                        
                         ctx.moveTo(px, py);
-                        // Curva de bezier simples
-                        if (State.layout === 'horizontal') {
-                            ctx.bezierCurveTo(px + 50, py, nx - 50, ny, nx, ny);
+                        
+                        let isCurved = State.lineStyle === 'curva' || State.lineStyle === 'seta_curva';
+                        
+                        if (isCurved) {
+                            if (State.layout === 'horizontal') {
+                                ctx.bezierCurveTo(px + 50, py, targetX - 50, targetY, targetX, targetY);
+                            } else if (State.layout === 'vertical') {
+                                ctx.bezierCurveTo(px, py + 50, targetX, targetY - 50, targetX, targetY);
+                            } else {
+                                ctx.lineTo(targetX, targetY);
+                            }
                         } else {
-                            ctx.lineTo(nx, ny);
+                            ctx.lineTo(targetX, targetY);
                         }
                     }
                 });
                 ctx.stroke();
+
+                // Desenhar Cabeças de Setas da Árvore
+                if (State.lineStyle === 'seta_reta' || State.lineStyle === 'seta_curva') {
+                    State.flatNodes.forEach(node => {
+                        const isCollapsed = State.meta[node.parent?.id]?.collapsed;
+                        if (node.parent && !isCollapsed) {
+                            const px = node.parent.x + node.parent.width / 2;
+                            const py = node.parent.y + node.parent.height / 2;
+                            const nx = node.x + node.width / 2;
+                            const ny = node.y + node.height / 2;
+                            
+                            let targetX = nx;
+                            let targetY = ny;
+                            if (State.layout === 'horizontal') targetX = nx > px ? node.x : node.x + node.width;
+                            else if (State.layout === 'vertical') targetY = ny > py ? node.y : node.y + node.height;
+
+                            let angle = Math.atan2(targetY - py, targetX - px);
+                            // Suavizar ângulo para layout ortogonal e curva
+                            if (State.layout === 'horizontal' && State.lineStyle === 'seta_curva') {
+                                angle = nx > px ? 0 : Math.PI;
+                            } else if (State.layout === 'vertical' && State.lineStyle === 'seta_curva') {
+                                angle = ny > py ? Math.PI/2 : -Math.PI/2;
+                            }
+                            drawArrowHead(targetX, targetY, angle);
+                        }
+                    });
+                }
+
+                // Draw Extra Connections (Ligações Manuais)
+                if (State.connections && State.connections.length > 0) {
+                    ctx.save();
+                    ctx.strokeStyle = primary;
+                    ctx.setLineDash([5, 5]);
+                    ctx.lineWidth = 2;
+                    ctx.beginPath();
+                    State.connections.forEach(conn => {
+                        const fromNode = State.flatNodes.find(n => n.id === conn.from);
+                        const toNode = State.flatNodes.find(n => n.id === conn.to);
+                        if (fromNode && toNode) {
+                            const fx = fromNode.x + fromNode.width / 2;
+                            const fy = fromNode.y + fromNode.height / 2;
+                            const tx = toNode.x + toNode.width / 2;
+                            const ty = toNode.y + toNode.height / 2;
+                            
+                            ctx.moveTo(fx, fy);
+                            let isCurved = State.lineStyle === 'curva' || State.lineStyle === 'seta_curva';
+                            if (isCurved) {
+                                ctx.bezierCurveTo(fx, fy - 60, tx, ty - 60, tx, ty);
+                            } else {
+                                ctx.lineTo(tx, ty);
+                            }
+                        }
+                    });
+                    ctx.stroke();
+                    ctx.setLineDash([]);
+                    
+                    if (State.lineStyle === 'seta_reta' || State.lineStyle === 'seta_curva') {
+                        State.connections.forEach(conn => {
+                            const fromNode = State.flatNodes.find(n => n.id === conn.from);
+                            const toNode = State.flatNodes.find(n => n.id === conn.to);
+                            if (fromNode && toNode) {
+                                const fx = fromNode.x + fromNode.width / 2;
+                                const fy = fromNode.y + fromNode.height / 2;
+                                const tx = toNode.x + toNode.width / 2;
+                                const ty = toNode.y + toNode.height / 2;
+                                let angle = Math.atan2(ty - fy, tx - fx);
+                                drawArrowHead(tx, ty, angle);
+                            }
+                        });
+                    }
+                    ctx.restore();
+                }
 
                 // Draw Nodes
                 ctx.font = State.style.font;
@@ -790,6 +913,54 @@
                 State.theme = State.theme === 'light' ? 'dark' : 'light';
                 body.setAttribute('data-theme', State.theme);
                 this.needsRender = true;
+                this.saveState();
+            },
+
+            showStatus(msg) {
+                const status = document.getElementById('status-bar');
+                status.innerText = msg;
+                status.style.opacity = 1;
+                setTimeout(() => status.style.opacity = 0, 3000);
+            },
+
+            reorganize() {
+                // Limpa configurações de posicionamento manual
+                Object.keys(State.meta).forEach(id => {
+                    delete State.meta[id].x;
+                    delete State.meta[id].y;
+                });
+                this.calculateLayout();
+                this.centerMap();
+                this.saveState();
+                this.showStatus("Mapa reorganizado automaticamente.");
+            },
+
+            changeLineStyle(style) {
+                State.lineStyle = style;
+                this.needsRender = true;
+                this.saveState();
+            },
+
+            changePalette(palette) {
+                State.palette = palette;
+                document.body.setAttribute('data-palette', palette);
+                this.needsRender = true;
+                this.saveState();
+            },
+
+            createConnection() {
+                const sel = Array.from(State.selection);
+                if (sel.length < 2) {
+                    this.showStatus("Selecione pelo menos 2 nós (Shift + Clique) para ligá-los.");
+                    return;
+                }
+                // Conecta todos os nós selecionados na ordem em que foram selecionados
+                for (let i = 0; i < sel.length - 1; i++) {
+                    State.connections.push({from: sel[i], to: sel[i+1]});
+                }
+                this.saveState();
+                this.needsRender = true;
+                this.showStatus("Ligação extra criada!");
             },
 
             changeNodeColor(color) {
@@ -811,6 +982,11 @@
                 
                 toRemove.sort((a,b) => b-a); // Remove do fim pro começo
                 toRemove.forEach(idx => lines.splice(idx, 1));
+                
+                // Limpar ligações extras órfãs
+                State.connections = State.connections.filter(conn => 
+                    !State.selection.has(conn.from) && !State.selection.has(conn.to)
+                );
                 
                 this.saveState();
                 this.editor.value = lines.join('\n');
@@ -899,13 +1075,13 @@
                 localStorage.setItem('mindflow_data', JSON.stringify({
                     text: State.rawText,
                     meta: State.meta,
+                    connections: State.connections,
                     layout: State.layout,
-                    theme: State.theme
+                    theme: State.theme,
+                    lineStyle: State.lineStyle,
+                    palette: State.palette
                 }));
-                const status = document.getElementById('status-bar');
-                status.innerText = "Salvo automaticamente!";
-                status.style.opacity = 1;
-                setTimeout(() => status.style.opacity = 0, 2000);
+                app.showStatus("Salvo automaticamente!");
             }, 1000),
 
             loadFromStorage() {
@@ -915,11 +1091,20 @@
                         const parsed = JSON.parse(data);
                         this.editor.value = parsed.text;
                         State.meta = parsed.meta || {};
+                        State.connections = parsed.connections || [];
                         State.layout = parsed.layout || 'horizontal';
                         State.theme = parsed.theme || 'light';
+                        State.lineStyle = parsed.lineStyle || 'curva';
+                        State.palette = parsed.palette || 'padrao';
                         
                         document.getElementById('layout-select').value = State.layout;
+                        const lineSel = document.getElementById('line-select');
+                        if (lineSel) lineSel.value = State.lineStyle;
+                        const palSel = document.getElementById('palette-select');
+                        if (palSel) palSel.value = State.palette;
+                        
                         document.body.setAttribute('data-theme', State.theme);
+                        document.body.setAttribute('data-palette', State.palette);
                     } catch (e) { console.error("Erro ao carregar do Storage", e); }
                 }
             },
@@ -937,7 +1122,13 @@
                 const data = JSON.stringify({
                     text: this.editor.value,
                     meta: State.meta,
-                    config: { layout: State.layout, theme: State.theme }
+                    connections: State.connections,
+                    config: { 
+                        layout: State.layout, 
+                        theme: State.theme, 
+                        lineStyle: State.lineStyle, 
+                        palette: State.palette 
+                    }
                 });
                 const blob = new Blob([data], { type: 'application/json' });
                 const url = URL.createObjectURL(blob);
@@ -960,11 +1151,21 @@
                             const parsed = JSON.parse(ev.target.result);
                             this.editor.value = parsed.text;
                             State.meta = parsed.meta || {};
+                            State.connections = parsed.connections || [];
                             if (parsed.config) {
-                                State.layout = parsed.config.layout;
-                                State.theme = parsed.config.theme;
+                                State.layout = parsed.config.layout || 'horizontal';
+                                State.theme = parsed.config.theme || 'light';
+                                State.lineStyle = parsed.config.lineStyle || 'curva';
+                                State.palette = parsed.config.palette || 'padrao';
+                                
                                 document.getElementById('layout-select').value = State.layout;
+                                const lineSel = document.getElementById('line-select');
+                                if (lineSel) lineSel.value = State.lineStyle;
+                                const palSel = document.getElementById('palette-select');
+                                if (palSel) palSel.value = State.palette;
+                                
                                 document.body.setAttribute('data-theme', State.theme);
+                                document.body.setAttribute('data-palette', State.palette);
                             }
                             this.syncEditorToTree();
                         } catch (err) { alert('Arquivo inválido!'); }
